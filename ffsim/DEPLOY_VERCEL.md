@@ -5,7 +5,9 @@
 ## 前提
 - リポジトリ: `kazuohoso/stock-data`（このアプリは `ffsim/` サブフォルダ）
 - ブランチ: 公開したいブランチ（例: `claude/rf-backtest-v1-work-0bm7nm` または main にマージ後）
-- ログイン用の Supabase 認証ユーザー（kazuohoso@gmail.com）が必要（RLSで保護のため）
+- 認証: dev_specs（decision_auth_supabase / auth_config）に従い **Google OAuth・オーナー限定
+  （kazuohoso@gmail.com）**。ユーザーは登録済み（新規作成不要）。
+- ⚠️ **Redirect URL の登録が必須**（登録しないと Site URL=kenko へ飛ばされる既知の罠）。
 
 ## 手順（Vercel 画面・数クリック）
 1. https://vercel.com にログイン →「Add New… → Project」
@@ -23,7 +25,11 @@
 - 以後、このブランチに git push するたびに自動で再ビルド・再公開されます。
 - Supabase 側は変更不要（アプリが anon キー＋RLS で読み取り、ログインした kazuohoso@gmail.com のみデータ表示）。
 
-## Supabase 認証ユーザーについて
-開くとログイン画面が出ます。ユーザー未登録の場合は Supabase ダッシュボード →
-Authentication → Users → Add user で kazuohoso@gmail.com のパスワードユーザーを作成してください。
-（この作業は代行可能です。）
+## Redirect URL 登録（ログイン成立に必須）
+Personal プロジェクト（ref `rlnokfjidvfgigwwrulh`）の
+Dashboard → Authentication → URL Configuration → Redirect URLs に、**既存を残したまま**追記:
+- 本番: `https://<プロジェクト名>.vercel.app`（素の形）と `https://<プロジェクト名>.vercel.app/**` の両方
+- ローカル: `http://localhost:5178` と `http://localhost:5178/**` の両方
+
+※ Site URL（kenko）は変更しない。素の形と `/**` の両方を入れるのが定石（片方だけだと本番へ落ちる）。
+Deploy 後にURLが確定するので、そのURLを上記に登録してから開くこと。

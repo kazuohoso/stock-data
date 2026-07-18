@@ -83,25 +83,28 @@ function Center({ children }: { children: React.ReactNode }) {
 }
 
 function Login() {
-  const [email, setEmail] = useState("kazuohoso@gmail.com");
-  const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
+  // dev_specs: 全アプリの認証は Supabase Auth の Google OAuth・オーナー限定。
+  // redirectTo は素の origin（localhost_port_map の書式の落とし穴に合わせる）。
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <form
-        className="bg-white p-8 rounded-xl shadow w-80 space-y-3"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
-          if (error) setErr(error.message);
-        }}
-      >
+      <div className="bg-white p-8 rounded-xl shadow w-80 space-y-4 text-center">
         <h1 className="text-lg font-bold">FF Sim — RF Backtest</h1>
-        <input className="border rounded w-full p-2" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email" />
-        <input className="border rounded w-full p-2" type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="password" />
+        <p className="text-sm text-gray-500">kazuohoso@gmail.com 限定</p>
+        <button
+          className="bg-gray-900 text-white rounded w-full p-2.5"
+          onClick={async () => {
+            const { error } = await supabase.auth.signInWithOAuth({
+              provider: "google",
+              options: { redirectTo: window.location.origin },
+            });
+            if (error) setErr(error.message);
+          }}
+        >
+          Googleでログイン
+        </button>
         {err && <div className="text-red-600 text-sm">{err}</div>}
-        <button className="bg-gray-900 text-white rounded w-full p-2">ログイン</button>
-      </form>
+      </div>
     </div>
   );
 }
