@@ -1,0 +1,4 @@
+# rf_backtest data-supply batch (local Windows 実行)
+requests>=2.31
+yfinance>=0.2.40
+pandas>=2.0
