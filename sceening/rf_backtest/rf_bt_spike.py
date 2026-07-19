@@ -329,53 +329,64 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--full", action="store_true", help="当該screen_dateを全消し再計算")
     ap.add_argument("--dry-run", action="store_true", help="DB投入せず判定だけ表示")
+    ap.add_argument("--single", action="store_true",
+                     help="SCREEN_DATES全件ではなく先頭の1点(SCREEN_DATE)だけ実行")
     args = ap.parse_args()
 
     cfg = DEFAULTS
-    print(f"[rf_bt_spike] screen_date={SCREEN_DATE} tickers={SPIKE_TICKERS}")
+    dates = [SCREEN_DATE] if args.single else SCREEN_DATES
+    print(f"[rf_bt_spike] screen_dates={[d.isoformat() for d in dates]} tickers={SPIKE_TICKERS}")
     cikmap = load_cik_map()
 
-    screens, price_rows, horizon_rows, sample_rows = [], [], [], []
-    for t in SPIKE_TICKERS:
-        cik = cikmap.get(t.upper())
-        if not cik:
-            print(f"  ! {t}: CIK未検出、スキップ"); continue
-        px, horizons, monthly = fetch_prices(t, SCREEN_DATE)
-        entry_px = px["entry_px"] if px else None
-        if entry_px is None:
-            print(f"  ! {t}: 価格取得不可、スキップ"); continue
-        s = compute_gates(build_screen(t, cik, entry_px, SCREEN_DATE), cfg)
-        screens.append(s)
-        for name, h in horizons.items():
-            horizon_rows.append(dict(ticker=t, screen_date=SCREEN_DATE.isoformat(),
-                                     horizon=name, ret=h["return"], end_price=h["px"],
-                                     end_date=h["date"], outcome="alive"))
-        for m in monthly:
-            sample_rows.append(dict(ticker=t, sample_date=m["date"], adj_close=m["adj_close"]))
-        g = "".join(["1" if getattr(s, f"g{i}_pass") else ("0" if getattr(s, f"g{i}_pass") is False else "?")
-                     for i in range(1, 7)])
-        print(f"  {t:5s} PER={s.per} fwdPER={s.fwd_per} EV/EBIT={s.ev_ebit} "
-              f"FCFy={s.fcf_yield} SY={s.sh_yield} gEPS={s.eps_growth} "
-              f"ND/EBITDA={s.net_debt_ebitda} ROA={s.roa}  gates[G1-6]={g}")
-        time.sleep(0.2)
+    total_screens = total_horizons = total_samples = 0
+    for sd in dates:
+        print(f"\n--- screen_date={sd} ---")
+        screens, horizon_rows, sample_rows = [], [], []
+        for t in SPIKE_TICKERS:
+            cik = cikmap.get(t.upper())
+            if not cik:
+                print(f"  ! {t}: CIK未検出、スキップ"); continue
+            px, horizons, monthly = fetch_prices(t, sd)
+            entry_px = px["entry_px"] if px else None
+            if entry_px is None:
+                print(f"  ! {t}: 価格取得不可、スキップ"); continue
+            s = compute_gates(build_screen(t, cik, entry_px, sd), cfg)
+            screens.append(s)
+            for name, h in horizons.items():
+                horizon_rows.append(dict(ticker=t, screen_date=sd.isoformat(),
+                                         horizon=name, ret=h["return"], end_price=h["px"],
+                                         end_date=h["date"], outcome="alive"))
+            for m in monthly:
+                sample_rows.append(dict(ticker=t, sample_date=m["date"], adj_close=m["adj_close"]))
+            g = "".join(["1" if getattr(s, f"g{i}_pass") else ("0" if getattr(s, f"g{i}_pass") is False else "?")
+                         for i in range(1, 7)])
+            print(f"  {t:5s} PER={s.per} fwdPER={s.fwd_per} EV/EBIT={s.ev_ebit} "
+                  f"FCFy={s.fcf_yield} SY={s.sh_yield} gEPS={s.eps_growth} "
+                  f"ND/EBITDA={s.net_debt_ebitda} ROA={s.roa}  gates[G1-6]={g}")
+            time.sleep(0.2)
+
+        if args.dry_run:
+            continue
+
+        screen_rows = []
+        for s in screens:
+            d = asdict(s)
+            d["sources"] = json.dumps(s.sources)
+            screen_rows.append(d)
+
+        sb_upsert("rf_bt_screens", screen_rows, on_conflict="ticker,screen_date")
+        if horizon_rows:
+            sb_upsert("rf_bt_horizon_returns", horizon_rows, on_conflict="ticker,screen_date,horizon")
+        if sample_rows:
+            sb_upsert("rf_bt_price_samples", sample_rows, on_conflict="ticker,sample_date")
+        total_screens += len(screen_rows)
+        total_horizons += len(horizon_rows)
+        total_samples += len(sample_rows)
 
     if args.dry_run:
-        print("[dry-run] DB投入スキップ"); return
-
-    # rf_bt_screens 行（個別フラグ＋生値＋来歴）
-    screen_rows = []
-    for s in screens:
-        d = asdict(s)
-        d["sources"] = json.dumps(s.sources)
-        screen_rows.append(d)
-
-    sb_upsert("rf_bt_screens", screen_rows, on_conflict="ticker,screen_date")
-    if horizon_rows:
-        sb_upsert("rf_bt_horizon_returns", horizon_rows, on_conflict="ticker,screen_date,horizon")
-    if sample_rows:
-        sb_upsert("rf_bt_price_samples", sample_rows, on_conflict="ticker,sample_date")
-    print(f"[rf_bt_spike] 投入完了: screens={len(screen_rows)} "
-          f"horizons={len(horizon_rows)} samples={len(sample_rows)}")
+        print("\n[dry-run] DB投入スキップ"); return
+    print(f"\n[rf_bt_spike] 全screen_date投入完了: screens={total_screens} "
+          f"horizons={total_horizons} samples={total_samples}")
 
 
 if __name__ == "__main__":
