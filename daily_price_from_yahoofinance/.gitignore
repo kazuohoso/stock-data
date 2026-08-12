@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+
+# 実行ログ（毎日の実行で肥大化する。履歴に焼き付けない）
+*.log
+fetch_log.txt
+run_output.txt

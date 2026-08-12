@@ -1,0 +1,147 @@
+"""
+ff_tickers.company_overview を英語 → 日本語に翻訳して上書きする。
+すでに日本語が入っているものはスキップ（CJK 文字比率で判定）。
+
+実行方法:
+    cd C:\\projects\\stock-data\\daily_price_from_yahoofinance
+    python translate_ff_tickers_overview_ja.py
+    python translate_ff_tickers_overview_ja.py --force  # 日本語済みも再翻訳
+
+必要な環境変数（.env に追記）:
+    ANTHROPIC_API_KEY=sk-ant-...
+
+モデル: claude-haiku-4-5-20251001（翻訳に十分・低コスト）
+"""
+import argparse
+import os
+import sys
+import time
+from pathlib import Path
+
+import anthropic
+from dotenv import load_dotenv
+from supabase import create_client, Client
+
+TICKERS_TABLE = "ff_tickers"
+MODEL         = "claude-haiku-4-5-20251001"
+SLEEP_BETWEEN = 0.3
+
+SCRIPT_DIR = Path(__file__).parent.resolve()
+
+
+def get_supabase() -> Client:
+    load_dotenv(SCRIPT_DIR / ".env")
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_KEY")
+    if not url or not key:
+        print("ERROR: .env に SUPABASE_URL / SUPABASE_SERVICE_KEY が必要です。")
+        sys.exit(1)
+    return create_client(url, key)
+
+
+def get_anthropic() -> anthropic.Anthropic:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("ERROR: .env に ANTHROPIC_API_KEY が必要です。")
+        sys.exit(1)
+    return anthropic.Anthropic(api_key=api_key)
+
+
+def is_japanese(text: str) -> bool:
+    """CJK 文字が 5% 以上 → 日本語とみなす。"""
+    if not text:
+        return False
+    cjk = sum(
+        1 for c in text
+        if '　' <= c <= '鿿' or '＀' <= c <= '￯' or '぀' <= c <= 'ヿ'
+    )
+    return cjk / len(text) > 0.05
+
+
+def translate(client: anthropic.Anthropic, text: str) -> str | None:
+    try:
+        msg = client.messages.create(
+            model=MODEL,
+            max_tokens=1024,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "以下の英語の企業概要を自然な日本語に翻訳してください。"
+                    "専門用語は適切な日本語表現を使い、簡潔にまとめてください。"
+                    "翻訳文のみ出力してください（説明・前置き不要）。\n\n"
+                    f"{text}"
+                ),
+            }],
+        )
+        return msg.content[0].text.strip()
+    except Exception as e:
+        print(f"    翻訳エラー: {type(e).__name__}: {e}")
+        return None
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force", action="store_true", help="日本語済みも再翻訳する")
+    args = parser.parse_args()
+
+    sb      = get_supabase()
+    ai      = get_anthropic()
+
+    print("=" * 60)
+    print("ff_tickers company_overview 日本語翻訳")
+    print(f"モデル: {MODEL}")
+    print(f"モード: {'強制再翻訳' if args.force else '英語のみ翻訳（日本語スキップ）'}")
+    print("=" * 60)
+
+    rows = (
+        sb.table(TICKERS_TABLE)
+        .select("pk_ff_tickers_id, ticker, company_overview")
+        .not_.is_("company_overview", "null")
+        .execute()
+        .data
+    )
+
+    if not args.force:
+        targets = [r for r in rows if not is_japanese(r["company_overview"] or "")]
+    else:
+        targets = [r for r in rows if r.get("company_overview")]
+
+    print(f"company_overview あり: {len(rows)} 件 / 翻訳対象: {len(targets)} 件")
+    print()
+
+    ok, skipped, failed = 0, 0, []
+
+    for idx, row in enumerate(targets, 1):
+        ticker = row["ticker"]
+        print(f"[{idx}/{len(targets)}] {ticker} ...", end=" ", flush=True)
+
+        ja_text = translate(ai, row["company_overview"])
+        time.sleep(SLEEP_BETWEEN)
+
+        if ja_text is None:
+            failed.append(ticker)
+            continue
+
+        try:
+            sb.table(TICKERS_TABLE).update({"company_overview": ja_text}).eq(
+                "pk_ff_tickers_id", row["pk_ff_tickers_id"]
+            ).execute()
+            ok += 1
+            print(f"OK ({len(ja_text)} 文字)")
+        except Exception as e:
+            failed.append(ticker)
+            print(f"UPDATE FAILED: {e}")
+
+    print()
+    print("=" * 60)
+    print("完了サマリー")
+    print(f"  翻訳成功: {ok} 件")
+    print(f"  スキップ: {skipped} 件（日本語済み）")
+    print(f"  失敗:     {len(failed)} 件")
+    if failed:
+        print(f"  失敗銘柄: {', '.join(failed)}")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
