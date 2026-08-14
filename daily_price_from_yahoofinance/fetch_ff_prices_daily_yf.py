@@ -55,6 +55,8 @@ MAX_RETRIES   = 4        # 1銘柄あたりの取得リトライ回数（RULE-49
 RETRY_BASE_SLEEP = 2.0   # 指数バックオフの基準秒数（レート制限以外の一過性エラー用）
 RATE_LIMIT_COOLDOWN_SEC = 90   # 429検知時、全ワーカーで共有して一斉に待つ秒数。短いと解除前に叩き直して悪化する
 PACE_DELAY_SEC = 0.35    # 429が出ていない平常時でも、1リクエストごとにこの間隔を空けてバーストを避ける
+SUSPECT_RETRY_SLEEP = 6.0  # T157: 取りこぼし疑いの救済パスは1本・この間隔で直列に叩く（Kaz指示：
+                           # 十分に間を空けてYahoo側のレート制限に触れないようにする）
 TICKER_CHUNK = 300  # v_ff_prices_latestはDISTINCT ON全銘柄横断のためフィルタ無しだとPostgRESTのstatement_timeout(8s)に達する。ticker IN()で絞ってチャンク化する（対象12,763件で発覚・dev_tool_tips記載パターン）。
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -371,7 +373,18 @@ def run(args):
     log_line(f"更新対象: {len(to_update)} 件（本日取得済みスキップ: {skip_count} 件）")
 
     ok, failed, no_data, total_rows = 0, [], 0, 0
+    suspect: list[str] = []   # T157: 拒否/取りこぼしの疑い（no_dataと混ぜない）
     start_ts = time.time()
+
+    # 🔒 T157: yfinance は Yahoo に拒否された時も「空のDataFrame」を返す＝例外にならない。
+    # そのため空を一律 no_data（非営業日・上場廃止）に分類すると、取りこぼしが
+    # 「データが無い」として静かに飲み込まれ、ログは常に「失敗0件」で健全に見える
+    # （dev_playbook RULE-75 原則1「欠損を悪い値に翻訳しない」の違反）。
+    # 判別材料は手元にある＝「前営業日には価格が取れていたのに今回だけ空」なら取りこぼし。
+    # 実測(2026-08-14)でこの規則の妥当性を確認済み：8/13欠損54件のうち、前営業日に
+    # 価格があった29件は間隔を空けて叩き直すと取得でき、数日前から無い21件(EA/GTLS等)は
+    # 本当に上場廃止・買収で消えていた。
+    RECENT_DAYS = 4   # last_date がこれ以内なら「直前まで取れていた」とみなす
 
     def job(ticker: str, last_date: str | None):
         if last_date:
@@ -384,7 +397,12 @@ def run(args):
         if rows is None:
             return ticker, "failed", None
         if not rows:
-            return ticker, "no_data", None
+            was_recent = (
+                last_date is not None
+                and (date.today() - date.fromisoformat(last_date)).days <= RECENT_DAYS
+            )
+            # 直前まで取れていた銘柄が空＝拒否/取りこぼしの疑い。no_data に混ぜない。
+            return ticker, ("suspect" if was_recent else "no_data"), None
         return ticker, "ok", rows
 
     items = sorted(to_update.items())
@@ -423,6 +441,8 @@ def run(args):
                 log_line(f"  進捗 {done_n}/{len(items)}（{time.time()-start_ts:.0f}秒経過）")
             if status == "no_data":
                 no_data += 1
+            elif status == "suspect":
+                suspect.append(ticker)
             elif status == "failed":
                 failed.append(ticker)
             else:
@@ -432,13 +452,42 @@ def run(args):
                     flush_buffer()
     flush_buffer()  # 端数を最後に送る（送り忘れ＝データ欠落になるので必ず実行する）
 
+    # 🔒 T157: 取りこぼし疑いを、十分に間隔を空けて直列に取り直す（Kaz指示 2026-08-14
+    # 「できるだけしっかり、十分に間が空くように（向こうでレート制限に引っかからないように）」）。
+    # 本体は3並列・0.35秒間隔だが、この救済パスは1本・SUSPECT_RETRY_SLEEP秒間隔で叩く。
+    # ここで取れれば取りこぼし、それでも空なら本当に存在しない＝no_dataへ確定させる。
+    if suspect:
+        log_line(f"取りこぼし疑い {len(suspect)} 銘柄を間隔 {SUSPECT_RETRY_SLEEP}秒 で取り直します")
+        recovered = 0
+        for t in sorted(suspect):
+            time.sleep(SUSPECT_RETRY_SLEEP)
+            last = to_update.get(t)
+            from_date = (date.fromisoformat(last) + timedelta(days=1)).isoformat() if last \
+                        else (date.today() - timedelta(days=90)).isoformat()
+            rows = fetch_daily_yf(t, from_date, today_str)
+            if rows:
+                buf.extend(rows)
+                pending_tickers.append(t)
+                recovered += 1
+            elif rows is None:
+                failed.append(t)
+            else:
+                no_data += 1
+        flush_buffer()
+        still = len(suspect) - recovered - len([t for t in failed if t in suspect])
+        log_line(f"  取りこぼし救済: {recovered} 銘柄を回収 / {still} 銘柄は本当に存在せず")
+        suspect = [t for t in suspect if t in failed]
+
     elapsed = time.time() - start_ts
     log_line("=" * 60)
     log_line("完了サマリー")
     log_line(f"  所要時間: {elapsed:.0f}秒")
     log_line(f"  更新成功: {ok} 銘柄 / {total_rows} 行")
-    log_line(f"  no_data:  {no_data} 銘柄（非営業日・上場廃止等）")
+    log_line(f"  no_data:  {no_data} 銘柄（非営業日・上場廃止等＝本当に存在しないと確認済み）")
+    log_line(f"  救済不能: {len(suspect)} 銘柄（直前まで取れていたのに回収できず＝要調査）")
     log_line(f"  失敗:     {len(failed)} 銘柄")
+    if suspect:
+        log_line(f"  救済不能銘柄: {', '.join(sorted(suspect))}")
     if failed:
         log_line(f"  失敗銘柄: {', '.join(failed)}")
     log_line("=" * 60)
@@ -454,6 +503,19 @@ def run(args):
         }).execute()
     except Exception as e:
         log_line(f"  ff_md_fetch_log 書き込み失敗: {e}")
+
+    # T157: 価格の流入が止まったことを FF Sim へ知らせ、日次判定を即座に走らせる。
+    # ここは「主トリガー」だが必須ではない＝失敗してもクラウド側の cron
+    # (rf-bt-daily-signals 23:00 UTC / retry 00:30 UTC) が必ず拾う。
+    # 判定ロジック自体はすべて Supabase 側にあり、ここは通知するだけ。
+    if failed:
+        log_line("  取得に失敗した銘柄があるため日次判定の通知は行いません（不完全な母集団での判定を避ける）")
+    else:
+        try:
+            res = sb.rpc("fn_bt_prices_ingest_done", {}).execute()
+            log_line(f"  FF Sim 日次判定を起動: {res.data}")
+        except Exception as e:
+            log_line(f"  FF Sim 日次判定の起動に失敗（cronが後で拾うため実害なし）: {e}")
 
 
 if __name__ == "__main__":

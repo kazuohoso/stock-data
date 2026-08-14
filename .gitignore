@@ -1,0 +1,22 @@
+# 🔒 認証情報は絶対にコミットしない（.env には Supabase の service_role キーが入る＝RLSをバイパスできる）
+.env
+.env.local
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 実行ログ・実行時の一時ファイル（毎日肥大するのでリポジトリに入れない）
+*.log
+fetch_log.txt
+run_output.txt
+run_manual*.log
+*.lock
+
+# 取得データそのもの（正本は Supabase。リポジトリはコードだけを持つ）
+*.csv
+*.xlsx
