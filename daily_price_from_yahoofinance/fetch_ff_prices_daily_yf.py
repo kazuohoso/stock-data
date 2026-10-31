@@ -361,8 +361,11 @@ def run(args):
 
     tickers = sorted({
         r["ticker"].strip().upper()
-        for r in select_all(sb, TICKERS_TABLE, "ticker, security_type")
+        # P249: 対象は fetch_enabled=true だけ（DBトリガーが status から導出。
+        # status='no_data'＝Yahooで日足が1日も取れない銘柄は false になり、毎日の空振りを止める）
+        for r in select_all(sb, TICKERS_TABLE, "ticker, security_type, fetch_enabled")
         if r.get("ticker") and r.get("security_type") in (None, "STK", "ETF")
+        and r.get("fetch_enabled") is True
     })
     log_line(f"対象銘柄: {len(tickers)} 件")
 

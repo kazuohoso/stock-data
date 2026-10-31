@@ -161,7 +161,9 @@ def main():
     # 対象銘柄を取得
     tickers = sorted({
         r["ticker"].strip().upper()
-        for r in sb.table(TICKERS_TABLE).select("ticker, security_type").execute().data
+        # P249: fetch_enabled=true だけ（status='no_data' はDBトリガーで false）。
+        # ★旧来この select は1000行上限で切れていた（範囲取得なし）。eq で絞って件数を減らす
+        for r in sb.table(TICKERS_TABLE).select("ticker, security_type").eq("fetch_enabled", True).execute().data
         if r.get("ticker") and r.get("security_type") in (None, "STK", "ETF")
     })
     print(f"対象銘柄: {len(tickers)} 件")
