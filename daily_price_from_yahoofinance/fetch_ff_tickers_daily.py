@@ -28,6 +28,7 @@ ff_tickers 全銘柄の長期日足を Yahoo Finance から取得し Supabase ff
 変更履歴:
     v1: 初版（参考 QQQprj_fetch_yahoo.py の取得部を流用し、長format + Supabase upsert 化）
 """
+import sys as _sys; _sys.path.insert(0, r"C:\projects\_tools"); import kaz_secrets as _kz  # RULE-86 v2: 鍵は keyring から
 import os
 import sys
 import time
@@ -61,7 +62,7 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 def get_supabase() -> Client:
     load_dotenv(SCRIPT_DIR / ".env")
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SERVICE_KEY")
+    key = _kz.supabase_key("ff_batch")
     if not url or not key:
         print("ERROR: .env に SUPABASE_URL と SUPABASE_SERVICE_KEY を設定してください。")
         print(f"       期待する場所: {SCRIPT_DIR / '.env'}")

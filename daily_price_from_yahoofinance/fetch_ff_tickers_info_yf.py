@@ -19,6 +19,7 @@ competitive_moat / weakness は AI 分析が必要なため対象外（ff-ticker
 依存パッケージ:
     pip install yfinance supabase python-dotenv
 """
+import sys as _sys; _sys.path.insert(0, r"C:\projects\_tools"); import kaz_secrets as _kz  # RULE-86 v2: 鍵は keyring から
 import argparse
 import os
 import sys
@@ -39,7 +40,7 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 def get_supabase() -> Client:
     load_dotenv(SCRIPT_DIR / ".env")
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SERVICE_KEY")
+    key = _kz.supabase_key("ff_batch")
     if not url or not key:
         print("ERROR: .env に SUPABASE_URL / SUPABASE_SERVICE_KEY が必要です。")
         sys.exit(1)

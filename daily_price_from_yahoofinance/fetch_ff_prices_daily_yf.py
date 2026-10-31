@@ -27,6 +27,7 @@ ff_tickers 全銘柄の日足を Yahoo Finance から差分取得し ff_prices_d
     v2 (2026-08-12): 並列化(ThreadPoolExecutor)・銘柄ごとリトライ・ファイルログ必須化・
                       タスクの ExecutionTimeLimit を1時間→3時間に緩和（fix_scheduled_task.ps1で実施）
 """
+import sys as _sys; _sys.path.insert(0, r"C:\projects\_tools"); import kaz_secrets as _kz  # RULE-86 v2: 鍵は keyring から
 import argparse
 import math
 import os
@@ -128,7 +129,7 @@ def rotate_log_if_huge() -> None:
 def get_supabase() -> Client:
     load_dotenv(SCRIPT_DIR / ".env")
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SERVICE_KEY")
+    key = _kz.supabase_key("ff_batch")
     if not url or not key:
         log_line("ERROR: .env に SUPABASE_URL / SUPABASE_SERVICE_KEY が必要です。")
         sys.exit(1)
