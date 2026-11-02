@@ -56,11 +56,12 @@ def get_supabase() -> Client:
 
 
 def get_mda_token(sb: Client) -> str:
-    row = sb.table("ff_config").select("value").eq("key", "marketdata_token").single().execute()
+    # T683: Vault から読む（ff_config の値は伏せ字）
+    row = sb.rpc("vault_get_secret", {"secret_name": "marketdata_token"}).execute()
     if not row.data:
-        print("ERROR: ff_config に marketdata_token が見つかりません。")
+        print("ERROR: Vault に marketdata_token が見つかりません。")
         sys.exit(1)
-    return row.data["value"]
+    return row.data
 
 
 # ============================================================
